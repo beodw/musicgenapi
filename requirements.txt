@@ -1,0 +1,7 @@
+runpod
+torch
+transformers
+huggingface_hub
+heartlib
+bitsandbytes
+accelerate
