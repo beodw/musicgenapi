@@ -83,7 +83,7 @@ def handler(job):
     job_input = job["input"]
     
     # Extract inputs (with Colab examples as defaults)
-    # lyrics = job_input.get("lyrics", "[Intro]\nFreetown magic.")
+    lyrics = job_input.get("lyrics", "")
     tags = job_input.get("tags", "afrobeats, energetic")
     max_duration_seconds = job_input.get("max_duration_seconds", 30)
     temperature = job_input.get("temperature", 1.0)
@@ -100,8 +100,7 @@ def handler(job):
         # Exact generation logic from your Colab
         with torch.no_grad():
             pipe(
-                # {"lyrics": lyrics, "tags": tags},
-                {"tags": tags},
+                {"lyrics": lyrics, "tags": tags},
                 max_audio_length_ms=max_audio_length_ms,
                 save_path=output_path,
                 topk=topk,
