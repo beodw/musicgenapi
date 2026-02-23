@@ -3,3 +3,4 @@ huggingface_hub
 heartlib
 bitsandbytes
 accelerate
+transformers
