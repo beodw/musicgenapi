@@ -8,7 +8,7 @@ from huggingface_hub import hf_hub_download, snapshot_download
 from transformers import BitsAndBytesConfig
 
 # --- AUTHENTICATION ---
-HF_TOKEN = "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"
+HF_TOKEN = os.environ.get("HF_TOKEN")
 
 # --- MOCKING SPACES ---
 # This ensures heartlib doesn't crash looking for the HuggingFace Spaces environment
