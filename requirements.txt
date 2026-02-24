@@ -4,3 +4,4 @@ heartlib
 bitsandbytes
 accelerate
 transformers
+requests

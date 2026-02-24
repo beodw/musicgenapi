@@ -107,6 +107,10 @@ def handler(job):
         for path in [output_path, ref_path]:
             if path and os.path.exists(path):
                 os.remove(path)
+        # FORCE GPU CLEANUP
+        torch.cuda.empty_cache() 
+        import gc
+        gc.collect()
 
 init_pipeline()
 runpod.serverless.start({"handler": handler})
