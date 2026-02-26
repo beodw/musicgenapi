@@ -7,6 +7,7 @@ import runpod
 import requests  # Added for downloading reference audio
 from huggingface_hub import hf_hub_download, snapshot_download
 from transformers import BitsAndBytesConfig
+import gc
 
 # --- AUTHENTICATION ---
 HF_TOKEN = os.environ.get("HF_TOKEN")
@@ -37,9 +38,9 @@ def download_models():
 def init_pipeline():
     global pipe
     model_dir = download_models()
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-    pipe = HeartMuLaGenPipeline.from_pretrained(model_dir, device=device, dtype=dtype, version="3B")
+    # device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    # dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    pipe = HeartMuLaGenPipeline.from_pretrained(model_dir, device="cpu", dtype=torch.bfloat16, version="3B")
     print("✅ Pipeline Initialized")
 
 def download_temp_audio(url):
@@ -57,7 +58,16 @@ def download_temp_audio(url):
             os.remove(temp_file.name)
         raise Exception(f"Failed to download reference audio: {str(e)}")
 
+def cleanup(output_path=None, ref_path=None):
+    torch.cuda.empty_cache() 
+    torch.cuda.ipc_collect()
+    gc.collect()
+    if output_path and ref_path:
+        for path in [output_path, ref_path]:
+                if path and os.path.exists(path):
+                    os.remove(path)
 def handler(job):
+    cleanup()
     job_input = job["input"]
     
     lyrics = job_input.get("lyrics", "")
@@ -98,19 +108,15 @@ def handler(job):
         with open(output_path, "rb") as audio_file:
             encoded_string = base64.b64encode(audio_file.read()).decode('utf-8')
         
+        # Cleanup both the output and the reference file
+        cleanup(output_path, ref_path)
+
         return {"refresh_worker": True,"audio_base64": encoded_string}
 
     except Exception as e:
-        return {"error": str(e)}
-    finally:
         # Cleanup both the output and the reference file
-        for path in [output_path, ref_path]:
-            if path and os.path.exists(path):
-                os.remove(path)
-        # FORCE GPU CLEANUP
-        torch.cuda.empty_cache() 
-        import gc
-        gc.collect()
+        cleanup(output_path, ref_path)
 
+        return {"refresh_worker": True,"error": str(e)}
 init_pipeline()
 runpod.serverless.start({"handler": handler})
