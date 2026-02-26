@@ -40,7 +40,7 @@ def init_pipeline():
     model_dir = download_models()
     # device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     # dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-    pipe = HeartMuLaGenPipeline.from_pretrained(model_dir, device="cpu", dtype=torch.bfloat16, version="3B")
+    pipe = HeartMuLaGenPipeline.from_pretrained(model_dir, device=torch.device("cpu"), dtype=torch.bfloat16, version="3B")
     print("✅ Pipeline Initialized")
 
 def download_temp_audio(url):
