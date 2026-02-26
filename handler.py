@@ -111,7 +111,6 @@ def handler(job):
         torch.cuda.empty_cache() 
         import gc
         gc.collect()
-        os._exit(0)
 
 init_pipeline()
 runpod.serverless.start({"handler": handler})
