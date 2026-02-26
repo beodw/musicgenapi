@@ -38,9 +38,9 @@ def download_models():
 def init_pipeline():
     global pipe
     model_dir = download_models()
-    # device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    # dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-    pipe = HeartMuLaGenPipeline.from_pretrained(model_dir, device=torch.device("cpu"), dtype=torch.bfloat16, version="3B")
+    if not torch.cuda.is_available(): 
+        return {"refresh_worker": True,"error": "CUDA is not available. The model requires a GPU."}
+    pipe = HeartMuLaGenPipeline.from_pretrained(model_dir, device=torch.device("cuda"), dtype=torch.bfloat16, version="3B")
     print("✅ Pipeline Initialized")
 
 def download_temp_audio(url):
