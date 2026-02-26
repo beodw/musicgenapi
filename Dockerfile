@@ -22,3 +22,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 5. Copy your handler and run
 COPY handler.py .
 CMD [ "python", "-u", "/handler.py" ]
+
+# 6. Setup environment variable for PyTorch CUDA memory management
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
