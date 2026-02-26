@@ -98,7 +98,7 @@ def handler(job):
         with open(output_path, "rb") as audio_file:
             encoded_string = base64.b64encode(audio_file.read()).decode('utf-8')
         
-        return {"audio_base64": encoded_string}
+        return {"refresh_worker": True,"audio_base64": encoded_string}
 
     except Exception as e:
         return {"error": str(e)}
