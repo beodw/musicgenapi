@@ -63,7 +63,7 @@ def download_temp_audio(url):
 def cleanup(output_path=None, ref_path=None):
     torch.cuda.empty_cache() 
     torch.cuda.ipc_collect()
-    gc.collect()
+    gc.collect() 
     if output_path and ref_path:
         for path in [output_path, ref_path]:
                 if path and os.path.exists(path):
