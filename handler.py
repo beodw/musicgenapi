@@ -8,6 +8,8 @@ import requests  # Added for downloading reference audio
 from huggingface_hub import hf_hub_download, snapshot_download
 from transformers import BitsAndBytesConfig
 import gc
+import threading
+import time
 
 # --- AUTHENTICATION ---
 HF_TOKEN = os.environ.get("HF_TOKEN")
@@ -66,7 +68,15 @@ def cleanup(output_path=None, ref_path=None):
         for path in [output_path, ref_path]:
                 if path and os.path.exists(path):
                     os.remove(path)
+def kill_worker():
+    # 5 seconds: Enough time for the SDK to finish the network call
+    time.sleep(5) 
+    print("TEST: Triggering intentional worker restart.")
+    os._exit(1)
+
 def handler(job):
+    threading.Thread(target=kill_worker, daemon=True).start()
+    return {"output":"Success"}
     cleanup()
     job_input = job["input"]
     
