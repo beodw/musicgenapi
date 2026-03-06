@@ -4,15 +4,16 @@ import tempfile
 import torch
 import base64
 import runpod
-import requests  # Added for downloading reference audio
+import requests
 from huggingface_hub import hf_hub_download, snapshot_download
 from transformers import BitsAndBytesConfig
 import gc
 import threading
 import time
 
-# --- AUTHENTICATION ---
+# --- AUTHENTICATION & CONFIG ---
 HF_TOKEN = os.environ.get("HF_TOKEN")
+SUPABASE_REF_URL = os.environ.get("SUPABASE_REF_URL") # Endpoint from env
 
 # --- MOCKING SPACES ---
 from types import ModuleType
@@ -64,10 +65,9 @@ def cleanup(output_path=None, ref_path=None):
     torch.cuda.empty_cache() 
     torch.cuda.ipc_collect()
     gc.collect() 
-    if output_path and ref_path:
-        for path in [output_path, ref_path]:
-                if path and os.path.exists(path):
-                    os.remove(path)
+    for path in [output_path, ref_path]:
+        if path and os.path.exists(path):
+            os.remove(path)
 
 def handler(job):
     cleanup()
@@ -80,14 +80,15 @@ def handler(job):
     topk = job_input.get("topk", 5)
     cfg_scale = job_input.get("cfg_scale", 1.0)
     
-    # New parameter for audio-to-audio
-    ref_audio_url = job_input.get("ref_audio_url")
+    # Priority: Job Input URL > Environment Variable URL
+    ref_audio_url = job_input.get("ref_audio_url", SUPABASE_REF_URL)
 
     output_path = ""
     ref_path = None
     try:
-        # Handle the reference audio download if URL exists
         model_input = {"lyrics": lyrics, "tags": tags}
+        
+        # Download and inject the reference audio if a URL exists
         if ref_audio_url:
             ref_path = download_temp_audio(ref_audio_url)
             model_input["ref_audio_path"] = ref_path
@@ -99,7 +100,7 @@ def handler(job):
 
         with torch.no_grad():
             pipe(
-                model_input, # Injected ref_audio_path here if provided
+                model_input, 
                 max_audio_length_ms=max_audio_length_ms,
                 save_path=output_path,
                 topk=topk,
@@ -111,15 +112,12 @@ def handler(job):
         with open(output_path, "rb") as audio_file:
             encoded_string = base64.b64encode(audio_file.read()).decode('utf-8')
         
-        # Cleanup both the output and the reference file
         cleanup(output_path, ref_path)
-
         return {"refresh_worker": True,"audio_base64": encoded_string}
 
     except Exception as e:
-        # Cleanup both the output and the reference file
         cleanup(output_path, ref_path)
-
         return {"refresh_worker": True,"error": str(e)}
+
 init_pipeline()
 runpod.serverless.start({"handler": handler})
