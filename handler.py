@@ -13,7 +13,7 @@ import time
 
 # --- AUTHENTICATION & CONFIG ---
 HF_TOKEN = os.environ.get("HF_TOKEN")
-SUPABASE_REF_URL = os.environ.get("SUPABASE_REF_URL") 
+SUPABASE_REF_URL = os.environ.get("SUPABASE_REF_URL") # Endpoint from env
 
 # --- MOCKING SPACES ---
 from types import ModuleType
@@ -34,8 +34,7 @@ def download_models():
     for filename in ["tokenizer.json", "gen_config.json"]:
         hf_hub_download(repo_id="HeartMuLa/HeartMuLaGen", filename=filename, local_dir=model_dir, token=HF_TOKEN)
 
-    # Switched snapshot to 7B repo
-    snapshot_download(repo_id="HeartMuLa/HeartMuLa-oss-7B", local_dir=os.path.join(model_dir, "HeartMuLa-oss-7B"), token=HF_TOKEN)
+    snapshot_download(repo_id="HeartMuLa/HeartMuLa-oss-3B-happy-new-year", local_dir=os.path.join(model_dir, "HeartMuLa-oss-3B"), token=HF_TOKEN)
     snapshot_download(repo_id="HeartMuLa/HeartCodec-oss-20260123", local_dir=os.path.join(model_dir, "HeartCodec-oss"), token=HF_TOKEN)
     return model_dir
 
@@ -44,10 +43,8 @@ def init_pipeline():
     model_dir = download_models()
     if not torch.cuda.is_available(): 
         return {"refresh_worker": True,"error": "CUDA is not available. The model requires a GPU."}
-    
-    # Switched version to 7B
-    pipe = HeartMuLaGenPipeline.from_pretrained(model_dir, device=torch.device("cuda"), dtype=torch.bfloat16, version="7B")
-    print("✅ 7B Pipeline Initialized")
+    pipe = HeartMuLaGenPipeline.from_pretrained(model_dir, device=torch.device("cuda"), dtype=torch.bfloat16, version="3B")
+    print("✅ Pipeline Initialized")
 
 def download_temp_audio(url):
     """Downloads an audio file from a URL to a temporary local file."""
@@ -83,6 +80,7 @@ def handler(job):
     topk = job_input.get("topk", 5)
     cfg_scale = job_input.get("cfg_scale", 1.0)
     
+    # Priority: Job Input URL > Environment Variable URL
     ref_audio_url = job_input.get("ref_audio_url", SUPABASE_REF_URL)
 
     output_path = ""
@@ -90,6 +88,7 @@ def handler(job):
     try:
         model_input = {"lyrics": lyrics, "tags": tags}
         
+        # Download and inject the reference audio if a URL exists
         if ref_audio_url:
             ref_path = download_temp_audio(ref_audio_url)
             model_input["ref_audio_path"] = ref_path
