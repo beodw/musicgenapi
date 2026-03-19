@@ -15,7 +15,7 @@ from heartlib import HeartMuLaGenPipeline
 HF_TOKEN = os.environ.get("HF_TOKEN")
 SUPABASE_REF_URL = os.environ.get("SUPABASE_REF_URL")
 
-# --- MOCKING SPACES (For HeartMuLa compatibility) ---
+# --- MOCKING SPACES ---
 from types import ModuleType
 mock_spaces = ModuleType("spaces")
 mock_spaces.GPU = lambda func=None, **kwargs: (lambda f: f) if func is None else func
@@ -41,14 +41,13 @@ def init_pipeline():
     model_dir = download_models()
     if not torch.cuda.is_available(): 
         return
-    # Initialize with streaming/lazy optimization
     pipe = HeartMuLaGenPipeline.from_pretrained(
         model_dir, 
         device=torch.device("cuda"), 
         dtype=torch.bfloat16, 
         version="3B"
     )
-    print("✅ Streaming Pipeline Initialized")
+    print("✅ Pipeline Initialized")
 
 def download_temp_audio(url):
     suffix = os.path.splitext(url)[1] or ".mp3"
@@ -62,18 +61,13 @@ def download_temp_audio(url):
     except Exception as e:
         if os.path.exists(temp_file.name):
             os.remove(temp_file.name)
-        raise Exception(f"Failed to download reference audio: {str(e)}")
+        raise Exception(f"Failed to download: {str(e)}")
 
 def cleanup():
     torch.cuda.empty_cache() 
     gc.collect()
 
-# --- THE GENERATOR HANDLER ---
 def handler(job):
-    """
-    Generator handler for RunPod. 
-    Yields chunks of base64 encoded audio as they are generated.
-    """
     cleanup()
     job_input = job["input"]
     
@@ -92,40 +86,43 @@ def handler(job):
             ref_path = download_temp_audio(ref_audio_url)
             model_input["ref_audio_path"] = ref_path
 
-        max_audio_length_ms = max_duration_seconds * 1000
-
-        # HeartMuLa streaming inference
-        # We use pipe.stream() or equivalent iterator provided by HeartMuLa
-        # This typically yields audio tensors (samples)
+        # HeartMuLa logic: Use the manual segment generator loop
+        # Since 'pipe.stream' is not an attribute, we use iterative generation
         with torch.no_grad():
-            audio_generator = pipe.stream(
-                model_input,
-                max_audio_length_ms=max_audio_length_ms,
-                topk=topk,
-                temperature=temperature,
-                cfg_scale=cfg_scale,
-            )
-
-            for i, audio_chunk_tensor in enumerate(audio_generator):
-                # Convert GPU tensor to CPU numpy array
-                audio_data = audio_chunk_tensor.cpu().numpy()
+            max_audio_length_ms = max_duration_seconds * 1000
+            current_ms = 0
+            chunk_ms = 5000 # 5 second chunks for streaming stability
+            
+            while current_ms < max_audio_length_ms:
+                # generate() returns the audio tensor for the segment
+                audio_tensor = pipe.generate(
+                    model_input,
+                    max_audio_length_ms=chunk_ms,
+                    topk=topk,
+                    temperature=temperature,
+                    cfg_scale=cfg_scale,
+                    # Crucial for HeartMuLa continuity
+                    continue_sequence=(current_ms > 0) 
+                )
                 
-                # Convert to MP3/WAV in-memory using BytesIO
+                if audio_tensor is None:
+                    break
+                
+                # Tensor to Base64
+                audio_data = audio_tensor.cpu().numpy()
                 buffer = io.BytesIO()
-                # HeartMuLa usually outputs at 44100Hz or 32000Hz
                 sf.write(buffer, audio_data, samplerate=44100, format='mp3')
                 buffer.seek(0)
+                chunk_b64 = base64.b64encode(buffer.read()).decode('utf-8')
                 
-                chunk_base64 = base64.b64encode(buffer.read()).decode('utf-8')
-                
-                # Yield the chunk to RunPod
                 yield {
-                    "chunk_index": i,
-                    "audio_base64": chunk_base64,
+                    "audio_base64": chunk_b64,
+                    "index": current_ms // chunk_ms,
                     "is_final": False
                 }
+                
+                current_ms += chunk_ms
 
-        # Signal completion
         yield {"is_final": True, "refresh_worker": True}
 
     except Exception as e:
@@ -136,5 +133,4 @@ def handler(job):
         cleanup()
 
 init_pipeline()
-# Use 'runpod.serverless.start' with the generator handler
 runpod.serverless.start({"handler": handler, "return_aggregate_stream": True})
