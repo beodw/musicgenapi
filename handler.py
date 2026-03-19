@@ -5,23 +5,21 @@ import torch
 import base64
 import runpod
 import requests
-from huggingface_hub import hf_hub_download, snapshot_download
-from transformers import BitsAndBytesConfig
 import gc
-import threading
-import time
+import io
+import soundfile as sf
+from huggingface_hub import hf_hub_download, snapshot_download
+from heartlib import HeartMuLaGenPipeline
 
 # --- AUTHENTICATION & CONFIG ---
 HF_TOKEN = os.environ.get("HF_TOKEN")
-SUPABASE_REF_URL = os.environ.get("SUPABASE_REF_URL") # Endpoint from env
+SUPABASE_REF_URL = os.environ.get("SUPABASE_REF_URL")
 
-# --- MOCKING SPACES ---
+# --- MOCKING SPACES (For HeartMuLa compatibility) ---
 from types import ModuleType
 mock_spaces = ModuleType("spaces")
 mock_spaces.GPU = lambda func=None, **kwargs: (lambda f: f) if func is None else func
 sys.modules["spaces"] = mock_spaces
-
-from heartlib import HeartMuLaGenPipeline
 
 pipe = None
 
@@ -42,12 +40,17 @@ def init_pipeline():
     global pipe
     model_dir = download_models()
     if not torch.cuda.is_available(): 
-        return {"refresh_worker": True,"error": "CUDA is not available. The model requires a GPU."}
-    pipe = HeartMuLaGenPipeline.from_pretrained(model_dir, device=torch.device("cuda"), dtype=torch.bfloat16, version="3B")
-    print("✅ Pipeline Initialized")
+        return
+    # Initialize with streaming/lazy optimization
+    pipe = HeartMuLaGenPipeline.from_pretrained(
+        model_dir, 
+        device=torch.device("cuda"), 
+        dtype=torch.bfloat16, 
+        version="3B"
+    )
+    print("✅ Streaming Pipeline Initialized")
 
 def download_temp_audio(url):
-    """Downloads an audio file from a URL to a temporary local file."""
     suffix = os.path.splitext(url)[1] or ".mp3"
     temp_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
     try:
@@ -61,15 +64,16 @@ def download_temp_audio(url):
             os.remove(temp_file.name)
         raise Exception(f"Failed to download reference audio: {str(e)}")
 
-def cleanup(output_path=None, ref_path=None):
+def cleanup():
     torch.cuda.empty_cache() 
-    torch.cuda.ipc_collect()
-    gc.collect() 
-    for path in [output_path, ref_path]:
-        if path and os.path.exists(path):
-            os.remove(path)
+    gc.collect()
 
+# --- THE GENERATOR HANDLER ---
 def handler(job):
+    """
+    Generator handler for RunPod. 
+    Yields chunks of base64 encoded audio as they are generated.
+    """
     cleanup()
     job_input = job["input"]
     
@@ -79,45 +83,58 @@ def handler(job):
     temperature = job_input.get("temperature", 1.0)
     topk = job_input.get("topk", 5)
     cfg_scale = job_input.get("cfg_scale", 1.0)
-    
-    # Priority: Job Input URL > Environment Variable URL
     ref_audio_url = job_input.get("ref_audio_url", SUPABASE_REF_URL)
 
-    output_path = ""
     ref_path = None
     try:
         model_input = {"lyrics": lyrics, "tags": tags}
-        
-        # Download and inject the reference audio if a URL exists
         if ref_audio_url:
             ref_path = download_temp_audio(ref_audio_url)
             model_input["ref_audio_path"] = ref_path
 
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-            output_path = f.name
-
         max_audio_length_ms = max_duration_seconds * 1000
 
+        # HeartMuLa streaming inference
+        # We use pipe.stream() or equivalent iterator provided by HeartMuLa
+        # This typically yields audio tensors (samples)
         with torch.no_grad():
-            pipe(
-                model_input, 
+            audio_generator = pipe.stream(
+                model_input,
                 max_audio_length_ms=max_audio_length_ms,
-                save_path=output_path,
                 topk=topk,
                 temperature=temperature,
                 cfg_scale=cfg_scale,
-                lazy_load=True,
             )
 
-        with open(output_path, "rb") as audio_file:
-            encoded_string = base64.b64encode(audio_file.read()).decode('utf-8')
-        
-        cleanup(output_path, ref_path)
-        return {"refresh_worker": True,"audio_base64": encoded_string}
+            for i, audio_chunk_tensor in enumerate(audio_generator):
+                # Convert GPU tensor to CPU numpy array
+                audio_data = audio_chunk_tensor.cpu().numpy()
+                
+                # Convert to MP3/WAV in-memory using BytesIO
+                buffer = io.BytesIO()
+                # HeartMuLa usually outputs at 44100Hz or 32000Hz
+                sf.write(buffer, audio_data, samplerate=44100, format='mp3')
+                buffer.seek(0)
+                
+                chunk_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+                
+                # Yield the chunk to RunPod
+                yield {
+                    "chunk_index": i,
+                    "audio_base64": chunk_base64,
+                    "is_final": False
+                }
+
+        # Signal completion
+        yield {"is_final": True, "refresh_worker": True}
 
     except Exception as e:
-        cleanup(output_path, ref_path)
-        return {"refresh_worker": True,"error": str(e)}
+        yield {"error": str(e), "refresh_worker": True}
+    finally:
+        if ref_path and os.path.exists(ref_path):
+            os.remove(ref_path)
+        cleanup()
 
 init_pipeline()
-runpod.serverless.start({"handler": handler})
+# Use 'runpod.serverless.start' with the generator handler
+runpod.serverless.start({"handler": handler, "return_aggregate_stream": True})
